@@ -1,7 +1,7 @@
 class Piece:
     def __init__(self, location, direction):
-        self.__location = location
-        self.__direction = direction
+        self.__location = tuple(location)
+        self.__direction = tuple(direction)
         self.__alive = True
 
     def set_location(self, location):
@@ -42,7 +42,3 @@ class Spotter(Piece):
         assert (abs(prev_location[0]-location[0]) +
                 abs(prev_location[1]-location[1])) <= 2
         return super().set_location(location)
-
-
-if __name__ == "__main__":
-    a = Assasin((1, 1), 1)

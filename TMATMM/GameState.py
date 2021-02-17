@@ -1,25 +1,46 @@
-from Player import Player
+from games.TMATMM.Player import Player
 from typing import List
-from agent import HBDagent as archer
+from json import dumps
+from copy import deepcopy
+from games.utils.utils import get_action
 
 
 class GameState:
 
+    def findWinner(self):
+
+        for agent in self.agents:
+            if agent.check_alive():
+                return [agent.ID]
+
+        return self.findWinnerPrev()
+
+    def findWinnerPrev(self):
+        agent_dicts = self.logs[-4]
+        winners = []
+        for agent_dict in agent_dicts:
+            if agent_dict["spotter alive"] or agent_dict["assasin alive"]:
+                winners.append(agent_dict["agent id"])
+
+        return winners
+
     def writeToHistory(self, inp):
-        self.logs += (inp + '\n')
+        self.logs.append(inp)
 
     def __init__(self, height, width, walls, high_points,
-                 history_file, spawn_points=[], spawn_directions=[], agent_classes=[]):
-
-        spawn_points = [((0, 0), (0, 1)), ((0, width-1), (1, width-1)),
-                        ((height-1, width-1), (height-1, width-2)), ((height-1, 0), (height-2, 0))]
-        spawn_directions = [((1, 0), (1, 0)), ((0, -1), (0, -1)),
-                            ((-1, 0), (-1, 0)), ((0, 1), (0, 1))]
+                 history_file, spawn_points=[], spawn_directions=[], agent_classes=[], store_logs=True, show_bot_prints=True):
+        if not spawn_points:
+            spawn_points = [((0, 0), (0, 1)), ((0, width-1), (1, width-1)),
+                            ((height-1, width-1), (height-1, width-2)), ((height-1, 0), (height-2, 0))]
+        if not spawn_directions:
+            spawn_directions = [((1, 0), (1, 0)), ((0, -1), (0, -1)),
+                                ((-1, 0), (-1, 0)), ((0, 1), (0, 1))]
+        print_logs = {"print_logs": show_bot_prints}
         initialising_vals = [[*spawn_points[x], *
                               spawn_directions[x]] for x in range(4)]
 
         self.size = (width, height)
-        self.logs = ""
+        self.logs = []
         self.high_points = set(high_points)
         board = [[1 for x in range(self.size[0])]for x in range(self.size[1])]
         for wall in walls:
@@ -28,15 +49,16 @@ class GameState:
             board[high_point[0]][high_point[1]] = 2
 
         self.board = board
-
-        self.writeToHistory(str(board))
+        self.store_logs = store_logs
+        self.writeToHistory(deepcopy(board))
 
         self.agents: List[Player]
         self.agents = []
         for ind, (initialising_val, agent_class) in enumerate(zip(initialising_vals, agent_classes)):
-            self.agents.append(Player(ind, *initialising_val, agent_class))
+            self.agents.append(
+                Player(ind, *initialising_val, agent_class, **print_logs))
 
-        self.writeToHistory(self.getStateStr())
+        self.writeToHistory(self.getState())
         self.circles = 0
         self.timer = 5
         self.done = False
@@ -44,13 +66,19 @@ class GameState:
 
     def writeHistoryToFile(self):
         with open(self.history_file, 'w') as f:
-            f.write(self.logs)
+            f.write(dumps(self.logs))
 
     def getStateStr(self):
         agents_state = ""
         for agent in self.agents:
-            agents_state += str(agent)+','
+            agents_state += dumps(dict(agent))+','
         return "["+agents_state[:-1]+"]"
+
+    def getState(self):
+        agents_state = []
+        for agent in self.agents:
+            agents_state.append(dict(agent))
+        return agents_state
 
     def collapseMap(self):
         for x in range(len(self.board)):
@@ -260,7 +288,8 @@ class GameState:
                  for x in range(self.size[1])]
 
         all_points = []
-
+        spotter_points = []
+        assasin_points = []
         if agent.spotter.get_status():
 
             spotter_point = agent.spotter.get_location()
@@ -270,12 +299,14 @@ class GameState:
             else:
                 points = self.calculateLineOfSightSpotter(
                     spotter_point, agent.spotter.get_direction())
+            spotter_points = points
             all_points += points
 
         if agent.assasin.get_status():
             assasin_point = agent.assasin.get_location()
             points = self.calculateLineOfSightAssasin(
                 assasin_point, agent.assasin.get_direction())
+            assasin_points = points
             all_points += points
 
         for point in all_points:
@@ -319,9 +350,12 @@ class GameState:
             "spotter direction": agent.spotter.get_direction(),
             "assasin direction": agent.assasin.get_direction()
         }
-        return percepts
+        return percepts, {"spotter_point": spotter_points, "asssasin_point": assasin_points}
 
     def agentStep(self, agentId, action):
+
+        assasin_step_results = []
+        spotter_step_results = []
 
         agent = self.agents[agentId]
         spotter_move = action["Spotter"]
@@ -342,6 +376,10 @@ class GameState:
                         (current_spotter_point[0]+move[0], current_spotter_point[1]+move[1]) != current_assasin_point):
                     current_spotter_point = (
                         current_spotter_point[0]+move[0], current_spotter_point[1]+move[1])
+                    spotter_step_results.append((move, True))
+
+                else:
+                    spotter_step_results.append((move, False))
 
             for other_agent in self.agents:
                 if other_agent.ID == agentId:
@@ -368,6 +406,10 @@ class GameState:
                         current_spotter_point != (current_assasin_point[0]+move[0], current_assasin_point[1]+move[1])):
                     current_assasin_point = (
                         current_assasin_point[0]+move[0], current_assasin_point[1]+move[1])
+                    assasin_step_results.append((move, True))
+
+                else:
+                    assasin_step_results.append((move, False))
 
             for other_agent in self.agents:
                 if other_agent.ID == agentId:
@@ -391,6 +433,8 @@ class GameState:
         agent.assasin.set_location(current_assasin_point)
         agent.spotter.set_location(current_spotter_point)
 
+        return {"agent id": agentId, "spotter steps": spotter_step_results, "assasin steps": assasin_step_results}
+
     def getNumAlive(self) -> int:
         num_alive = 0
         for agent in self.agents:
@@ -405,22 +449,44 @@ class GameState:
 
         if num_alive <= 1:
             self.done = True
-            self.writeToHistory(self.getStateStr())
+            winner = self.findWinner()
+            self.writeToHistory(winner)
+            print(winner)
             print("GAME OVER")
             return
 
         for agent in self.agents:
             if agent.check_alive():
-                percepts = self.calculatePercepts(agent.ID)
-                action = agent.agent.step(percepts)
-                self.agentStep(agent.ID, action)
-                self.writeToHistory(self.getStateStr())
+                percepts, viewable_points = self.calculatePercepts(agent.ID)
+                action = get_action(agent.agent.step, percepts, default_action={
+                    "Spotter": {
+                        "direction": agent.spotter.get_direction(),
+                        "moves": []
+                    },
+                    "Assasin": {
+                        "direction": agent.assasin.get_direction(),
+                        "moves": []
+                    },
+                    "Debug": "move skipped due to error/ timeout"
+                })
+                # action = agent.agent.step(percepts)
+                moves_dict = self.agentStep(agent.ID, action)
+                moves_dict["viewable points"] = viewable_points
+                if self.store_logs:
+                    try:
+                        moves_dict["Debug"] = action["Debug"]
+                    except:
+                        pass
+                self.writeToHistory(moves_dict)
+                self.writeToHistory(self.getState())
 
         num_alive = self.getNumAlive()
 
         if num_alive <= 1:
             self.done = True
-            self.writeToHistory(self.getStateStr())
+            winner = self.findWinner()
+            self.writeToHistory(winner)
+            print(winner)
             print("GAME OVER")
             return
 
@@ -429,29 +495,7 @@ class GameState:
         if self.timer == 0:
             self.timer = 5
             self.collapseMap()
-            self.writeToHistory("0")
-            self.writeToHistory(str(self.board))
-            self.writeToHistory(self.getStateStr())
+            self.writeToHistory(0)
+            self.writeToHistory(deepcopy(self.board))
+            self.writeToHistory(self.getState())
             self.circles += 1
-
-
-if __name__ == "__main__":
-    height = 19
-    width = 19
-    walls = []
-    highPoints = []
-    f = open("./board1")
-    for x in range(width):
-        stuff = f.readline()
-        # print(len(stuff))
-        for ind, letters in enumerate(stuff):
-            if letters == "W":
-                walls.append((x, ind))
-            elif letters == "O":
-                highPoints.append((x, ind))
-    f.close()
-    board = GameState(height, width, walls, highPoints, 'history.hbd',
-                      agent_classes=[archer, archer, archer, archer])
-    while not board.done:
-        board.gameStep()
-    board.writeHistoryToFile()
